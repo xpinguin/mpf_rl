@@ -33,3 +33,12 @@ nosetests.xml
 .mr.developer.cfg
 .project
 .pydevproject
+
+
+# Test stuff
+about OpenCL.txt
+*.npy
+*.png
+
+# early prototype
+mpfrl_0_0_loopsom_plsom.py
