@@ -8,7 +8,6 @@ import ai as maximin_ai
 import mpfrl_ai as ai
 import montecarlo_ai as mc_ai
 
-
 EMPTY = 0.0
 NOUGHT = 0.5
 CROSS = 1.0
@@ -128,7 +127,7 @@ def play_game():
 		partial(maximin_ai.make_move, game_field[:])
 	
 	opponents_move_funcs[int(player_side > ai.my_side)] = \
-		partial(mc_ai.make_move, game_field[:])
+		partial(ai.make_move, game_field[:])
 	
 	game_no = 0
 	reinforcement = 0
@@ -156,7 +155,7 @@ def play_game():
 					score[0] += 1
 					
 				else:
-					reinforcement = 0.5
+					reinforcement = 1.0 # 0.5
 					score[0] += 1
 					score[1] += 1
 				
@@ -169,6 +168,9 @@ def play_game():
 			
 			opponents_move_funcs[turn_iter % 2](reinforcement)
 			
+			if (reinforcement != 0.0):
+				reinforcement -= np.sign(reinforcement) * 0.5
+			
 			turn_iter += 1
 		
 		
@@ -177,7 +179,7 @@ def play_game():
 		
 		game_no += 1
 		
-		time.sleep(2)
+		#time.sleep(2)
 				
 play_game()
 		

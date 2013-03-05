@@ -31,24 +31,41 @@ class _Base_MPF_Unit:
 	
 	"""
 	
-	def __init__(self, ss_class, ts_class, input_dim, ss_shape, ts_shape, parent_unit, unit_type, h = None):
-		# Spatial SOM (Spatial pooler)
-		self.ss = ss_class(ss_shape, input_dim, 
-						noise = UniformNoise(-0.5, 0.5, 1.0, 0.0002)
-		)
-		
-		# Temporal SOM (Temporal pooler)
-		self.ts = ts_class(ts_shape, ss_shape[0] * ss_shape[1], 
-							rsom_ext = True,
-							noise = UniformNoise(-0.5, 0.5, 1.0, 0.0002)
-		)
+	def __init__(self, ss_class, ts_class, input_dim, ss_shape, ts_shape, 
+					parent_unit, unit_type, unit_level = None, h = None):
 		
 		# Type of unit (used by containing hierarchy)
 		self.unit_type = unit_type
 		if (unit_type == MPF_UT_SENSOR) or (unit_type == MPF_UT_ACTUATOR):
 			self.unit_level = 0
 		else:
-			self.unit_level = None
+			self.unit_level = unit_level
+		
+		noise_magn_decrease = 0.0001
+		if (self.unit_level != None):
+			# let noise decrease depened exponentially on level id
+			noise_magn_decrease *= 10**(-self.unit_level)
+		
+		# Spatial SOM (Spatial pooler)
+		self.ss = ss_class(ss_shape, input_dim, 
+						noise = UniformNoise(-0.5, 0.5, 1.0, noise_magn_decrease)
+		)
+		
+		# Temporal SOM (Temporal pooler)
+		# NOTE: If enabled!
+		if ((ts_class == None) or (ts_class == None.__class__)):
+			self.has_ts = False
+			
+			# just temporary compatiblity solution
+			self.ts = self.ss
+			
+		else:
+			self.has_ts = True
+			
+			self.ts = ts_class(ts_shape, ss_shape[0] * ss_shape[1], 
+							rsom_ext = True,
+							noise = UniformNoise(-0.5, 0.5, 1.0, noise_magn_decrease)
+			)
 		
 		# Adjust tree of units
 		self.children_units = []
@@ -83,7 +100,9 @@ class _Base_MPF_Unit:
 		
 		# store spatial and temporal poolers
 		res_d["ss"] = self.ss._to_matlab_mat()
-		res_d["ts"] = self.ts._to_matlab_mat()
+		
+		if (self.has_ts):
+			res_d["ts"] = self.ts._to_matlab_mat()
 				
 		return res_d
 			
@@ -324,7 +343,7 @@ class MPF_Unit_RL(_Base_MPF_Unit):
 		self.min_rw_bias_influence = 0.1
 		
 		# last temporal SOM's output (activation vector) scaled by 
-		# rewars correlator's learning-rate
+		# rewards correlator's learning-rate
 		self.__last_ts_act_vec = zeros(self.ts.act_vec.shape) 
 		
 		# backward pass temporal pooler activation vector bias
@@ -371,7 +390,9 @@ class MPF_Unit_RL(_Base_MPF_Unit):
 		self.ss.update_neurons(ss_adj_bmu_ind, input_vec)
 		
 		# locally predict next SS's activation vector
-		# TODO: Should it be BEFORE or AFTER neurons update
+		# TODO: Should it be BEFORE or AFTER neurons update?
+		# QUESTION: May be better predict by orthogonal activation vector?
+		#
 		self.ss_act_vec_local_pred[:] = self.ss.predict_next_act_vec()
 		
 		### (IS THIS REALLY NEEDED, as long as activation vector is
@@ -383,21 +404,18 @@ class MPF_Unit_RL(_Base_MPF_Unit):
 		###
 		
 		# temporaly classify biased activation vector
-		# vector desired to be highly orthogonal in order to reduce 
-		# uncertainty in RSOM
-		self.ss.act_vec[:] = 0.0
-		self.ss.act_vec[ss_adj_bmu_ind] = 1.0
+		if (self.has_ts):
+			# vector desired to be highly orthogonal in order to reduce 
+			# uncertainty in RSOM
+			self.ss.act_vec[:] = 0.0
+			self.ss.act_vec[ss_adj_bmu_ind] = 1.0
+			
+			self.ts.feed(self.ss.act_vec[:])
 		
-		## prediction by the orthogonal activation??
-		#self.ss_act_vec_local_pred[:] = self.ss.predict_next_act_vec()
-		#
-		
-		self.ts.feed(self.ss.act_vec[:])
-		
-		### The same as for SS: RSOM's activation vector must be normalized
-		### likelihood - proper PMF! 
-		self.ts.act_vec /= sum(self.ts.act_vec)
-		###
+			### The same as for SS: RSOM's activation vector must be normalized
+			### likelihood - proper PMF! 
+			self.ts.act_vec /= sum(self.ts.act_vec)
+			###
 		
 		# prepare TS activation bias (from reinforcement) for 
 		# backward pass
@@ -456,11 +474,19 @@ class MPF_Unit_RL(_Base_MPF_Unit):
 		# 1. For backward pass Spatial SOM's activation vector
 		# 2. For next (t+1) forward pass Spatial SOM's output act_vec adjustment
 		#	along with its own predictor
-		self.ss_act_vec_global_pred[:] = self.ts.generate(ts_act_vec[:], 1)[0, :]
+		#
+		if (self.has_ts):
+			self.ss_act_vec_global_pred[:] = \
+								self.ts.generate(ts_act_vec[:], 1)[0, :]
+								
+			###
+			self.ss_act_vec_global_pred /= sum(self.ss_act_vec_global_pred)
+			###
 		
-		###
-		self.ss_act_vec_global_pred /= sum(self.ss_act_vec_global_pred)
-		###
+		# 'ts_act_vec' is already a global prediction in case of lack of RSOM
+		else:
+			self.ss_act_vec_global_pred[:] = ts_act_vec
+		
 		
 		# unite global and local predictions and add uniform probabilities for
 		# "plasticity" as suggested in original paper
@@ -470,5 +496,6 @@ class MPF_Unit_RL(_Base_MPF_Unit):
 		self.ss_act_vec_total_pred /= sum(self.ss_act_vec_total_pred)
 		
 		# pass this "total" prediction to SOM
-		self._accu_ss_io_vec[:] = self.ss.generate(self.ss_act_vec_total_pred[:], 1)[0, :]
-		
+		self._accu_ss_io_vec[:] = \
+					self.ss.generate(self.ss_act_vec_total_pred[:], 1)[0, :]
+	

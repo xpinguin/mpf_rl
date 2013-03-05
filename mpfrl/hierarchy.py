@@ -26,7 +26,8 @@ class MPF_Hierarchy:
 	
 	"""
 	
-	def __init__(self, l0_units, levels_num, dump_period = 0, dump_path = ""):
+	def __init__(self, l0_units, levels_num, dump_period = 0, dump_path = "", 
+					ss_class = None, ts_class = None):
 		# Output vector after hierarchy evaluation
 		# this vector is a prediction of next input
 		self.output_vec = zeros(
@@ -37,7 +38,21 @@ class MPF_Hierarchy:
 				)
 		)
 		
+		# store classes for constructing hierarchy
+		# -- unit class
 		self.__mpf_unit_class = l0_units[0].__class__
+		
+		# -- spatial SOM class
+		if (ss_class == None):
+			self.__spatial_som_class = l0_units[0].ss.__class__
+		else:
+			self.__spatial_som_class = ss_class
+		
+		# -- RSOM (temporal SOM) class	
+		if (ts_class == None):
+			self.__temporal_som_class = l0_units[0].ts.__class__
+		else:
+			self.__temporal_som_class = ts_class
 		
 		# parts of input (and output!) vector associated to units
 		self.l0_iv_ranges = []
@@ -154,8 +169,8 @@ class MPF_Hierarchy:
 		
 		def _add_unit(children, ss_ts_shapes, level_id):
 			new_unit = self.__mpf_unit_class(
-				ss_class = self.l0_units[0].ss.__class__,
-				ts_class = self.l0_units[0].ts.__class__,
+				ss_class = self.__spatial_som_class,
+				ts_class = self.__temporal_som_class,
 											
 				input_dim = reduce(
 					lambda a, u: a + u.ts.neurons.shape[0],
@@ -169,10 +184,9 @@ class MPF_Hierarchy:
 				
 				parent_unit = None,
 				unit_type = MPF_UT_INTERNAL,
+				unit_level = level_id,
 				h = self
 			)
-			
-			new_unit.unit_level = level_id
 			
 			for child_unit in children:
 				new_unit.add_child(child_unit)
@@ -205,7 +219,7 @@ class MPF_Hierarchy:
 				new_units.append(
 								_add_unit(
 									lk_units[first_child_id:last_child_id],
-									((4, 4), (6, 6)),
+									((3, 3), (4, 4)),
 									level_id + 1
 								)
 				)
@@ -213,7 +227,7 @@ class MPF_Hierarchy:
 			lk_units = new_units
 			
 		# add top node at last
-		self.top_unit = _add_unit(lk_units, ((8, 8), (5, 5)), levels_num - 1)
+		self.top_unit = _add_unit(lk_units, ((20, 20), (10, 10)), levels_num - 1)
 	
 	def evaluate(self, input_vec, reinforcement):
 		"""
@@ -222,6 +236,7 @@ class MPF_Hierarchy:
 		NOTE: 'reinforcement' should be in [-1, 1]!
 		"""
 		
+		"""
 		# update reinforcement's first derivative
 		if (self.max_abs_reinforcement_prime == 0.0):
 			self.reinforcement_prime = (reinforcement - self._prev_reinforcement)
@@ -240,7 +255,10 @@ class MPF_Hierarchy:
 			(1 - self._reinforcement_prime_decay) * self._prev_reinforcement_prime
 			
 		self._prev_reinforcement_prime = self.reinforcement_prime 
+		"""
 		
+		# Try out
+		self.reinforcement_prime = reinforcement
 
 		
 		# -- pass input_vec to L0 units
