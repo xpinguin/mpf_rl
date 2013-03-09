@@ -1,19 +1,32 @@
 import numpy as np
-import pickle
+import cPickle as pickle
+import gzip
+
+from copy import deepcopy
 
 FIELD_SIZE = 9
 SIDES_NOMINALS = {"cross" : 1.0, "nought" : 0.5}
 
-#my_side = SIDES_NOMINALS["nought"]
 my_side = None
+my_side_name = ""
 
 __b3_b10 = np.array([3**i for i in xrange(FIELD_SIZE)])
 
-# prebuilt layouts tree
-__field_dec_layouts = None
-
-# prebuilt Wald's maximin tree
-__maximin_decision_tree = None
+# prebuild Wald's maximin tree
+# used for two purposes:
+#	1. AI move making
+#	2. Opponents moves scoring
+# Each dict value has following structure
+# [
+# 	(0) payout, 
+# 	(1) [children layouts],
+#	(2) next moving side nominal,
+# 	(3) best child layout (i.e. best move),
+#	(4) ndarray[layouts relative score (best == 1; worst == 0)]
+# ]
+# last two elements exists only when next moving side == tree's side
+#
+full_maximin_decision_tree = {"cross" : None, "nought" : None}
 
 def __ndarray_to_dec_layout(arr):
 	"""
@@ -54,6 +67,22 @@ def __build_field_layouts_dec(side):
 	"""
 	
 	### --- Helper functions ---
+	def __next_move_side(dec_layout):
+		"""
+		return nominal of side which will move next assuming given game layout
+		"""
+		
+		nominals_counter = [0, 0, 0]
+		
+		for i in xrange(0, FIELD_SIZE):
+			nominals_counter[dec_layout % 3] += 1
+			dec_layout /= 3
+			
+		if (nominals_counter[1] == nominals_counter[2]):
+			return SIDES_NOMINALS["cross"]
+		
+		return SIDES_NOMINALS["nought"]
+	
 	
 	def __evolve_layout(arr, empty_skip = 0):
 		current_side = 2 # cross
@@ -89,7 +118,7 @@ def __build_field_layouts_dec(side):
 			elif (_prod == (((side * 2) % 2) + 1)**3):
 				return -1.0
 			
-		return 0.0
+		return None
 			
 	### ---
 	
@@ -107,8 +136,12 @@ def __build_field_layouts_dec(side):
 		cur_layout = layouts_queue.pop()
 		cur_layout_dec = __ndarray_to_dec_layout(cur_layout)
 		
-		res_layouts[cur_layout_dec] = [__layout_payout(cur_layout), []]
-		if (res_layouts[cur_layout_dec][0] != 0.0): continue
+		res_layouts[cur_layout_dec] = [
+							__layout_payout(cur_layout),
+							[], # child layouts
+							__next_move_side(cur_layout_dec),
+		]
+		if (res_layouts[cur_layout_dec][0] != None): continue
 		
 		
 		for i in xrange(9):
@@ -123,112 +156,157 @@ def __build_field_layouts_dec(side):
 			
 		# handle drawn game (nobody wins)
 		if (len(res_layouts[cur_layout_dec][1]) == 0):
-			res_layouts[cur_layout_dec][0] = 0.5
+			res_layouts[cur_layout_dec][0] = 0.0
 			
 	return res_layouts
 		
 	
-def __build_maximin_decision_tree():
+	
+def build_maximin_decision_tree(side, raw_dec_layouts):
 	"""
 	builds Wald's maximin decision tree from prebuilt layouts
 	"""
 	
-	global __maximin_decision_tree
-	global __field_dec_layouts
+	if (raw_dec_layouts == None): return False
 	
-	if (__field_dec_layouts == None): return False
+	raw_dec_layouts = deepcopy(raw_dec_layouts)
 	
-	# update branches payouts for further usage with Wald's maximin model
-	# i.e.
-	# branch payout = min(children payouts) 
+	# build full maximin tree against given side nominal
+	#
 	layouts_queue = [
 					dec_layout for (dec_layout, props) in \
-						 __field_dec_layouts.iteritems() if props[0] == 0.0
+						 raw_dec_layouts.iteritems() if props[0] == None
 	]
-	
-	for l in layouts_queue:
-		__field_dec_layouts[l][0] = None
 	
 	while (len(layouts_queue) > 0):
 		cur_layout_dec = layouts_queue.pop()
 		
-		"""
-		min_payout = 1e+20
-		
-		for child_layout_dec in __field_dec_layouts[cur_layout_dec][1]:
-			if (__field_dec_layouts[child_layout_dec][0] == None):
-				layouts_queue.insert(0, cur_layout_dec)
-				min_payout = None
-				
-				break
+		if (raw_dec_layouts[cur_layout_dec][2] == side):
+			""" choose maximumum minimal payout at my turn """
 			
-			if (__field_dec_layouts[child_layout_dec][0] < min_payout):
-				min_payout = __field_dec_layouts[child_layout_dec][0]
-				
-		if (min_payout != None):
-			__field_dec_layouts[cur_layout_dec][0] = min_payout
-		"""	
-		
-		avg_payout = 0.0
-		
-		for child_layout_dec in __field_dec_layouts[cur_layout_dec][1]:
-			if (__field_dec_layouts[child_layout_dec][0] == None):
-				layouts_queue.insert(0, cur_layout_dec)
-				avg_payout = None
-				
-				break
+			if (len(raw_dec_layouts[cur_layout_dec]) < 4):
+				raw_dec_layouts[cur_layout_dec].extend([None, None])
 			
-			avg_payout += __field_dec_layouts[child_layout_dec][0]
+			raw_dec_layouts[cur_layout_dec][3] = None
+			raw_dec_layouts[cur_layout_dec][4] = np.zeros(
+							len(raw_dec_layouts[cur_layout_dec][1])
+			)
+			
+			max_payout = -1e+99
+			max_payout_children = None
+			
+			child_index = 0
+			for child_layout_dec in raw_dec_layouts[cur_layout_dec][1]:
+				if (raw_dec_layouts[child_layout_dec][0] == None):
+					layouts_queue.insert(0, cur_layout_dec)
+					max_payout = None
+					
+					break
 				
-		if (avg_payout != None):
-			__field_dec_layouts[cur_layout_dec][0] = avg_payout / \
-							len(__field_dec_layouts[cur_layout_dec][1])
+				if (raw_dec_layouts[child_layout_dec][0] > max_payout):
+					max_payout = raw_dec_layouts[child_layout_dec][0]
+					max_payout_children = child_layout_dec
+					
+				raw_dec_layouts[cur_layout_dec][4][child_index] = \
+							raw_dec_layouts[child_layout_dec][0] + 1.0
+				
+				child_index += 1
 			
-	#for props in __field_dec_layouts.itervalues():
-	#	print props[0]
+			if (max_payout != None):
+				raw_dec_layouts[cur_layout_dec][0] = max_payout
+				raw_dec_layouts[cur_layout_dec][3] = max_payout_children
+				
+				if (max_payout > -1.0):
+					raw_dec_layouts[cur_layout_dec][4] /= max_payout + 1
+		
+		else:
+			"""
+				find the worst situation of layout's evolution assuming
+				opponent makes turn (i.e. something that we cannot affect);
+				this worst situation (mimimal payout) is exactly the payout 
+				for current layout
+			"""
 			
-	# create decision tree that maximizes payout
-	__maximin_decision_tree = dict()
+			min_payout = 1e+20
+			
+			for child_layout_dec in raw_dec_layouts[cur_layout_dec][1]:
+				if (raw_dec_layouts[child_layout_dec][0] == None):
+					layouts_queue.insert(0, cur_layout_dec)
+					min_payout = None
+					
+					break
+				
+				if (raw_dec_layouts[child_layout_dec][0] < min_payout):
+					min_payout = raw_dec_layouts[child_layout_dec][0]
+					
+			if (min_payout != None):
+				raw_dec_layouts[cur_layout_dec][0] = min_payout
+		
+		
+	return raw_dec_layouts
+		
 	
-	for (dec_layout, props) in __field_dec_layouts.iteritems():
-		max_payout = -1e+99
-		max_payout_children = None
-		
-		for child_dec_layout in props[1]:
-			if (__field_dec_layouts[child_dec_layout][0] > max_payout):
-				max_payout = __field_dec_layouts[child_dec_layout][0]
-				max_payout_children = child_dec_layout
-		
-		__maximin_decision_tree[dec_layout] = max_payout_children
-		
-	# that's all
-	return True
-		
-		
-def build_and_store_dec_layouts():
-	global __field_dec_layouts
+def load_cached_maximin_tree(data_dir):
+	"""
+	Reads maximin decision tree from cache,
+	or build it and store, if no cache still exists
+	"""
 	
-	field_dec_layouts = __build_field_layouts_dec(SIDES_NOMINALS["nought"])
+	global full_maximin_decision_tree
 	
-	dump_file = open("dec_layouts_nought.pickle", "wb")
-	pickle.dump(field_dec_layouts, dump_file)
-	dump_file.close()
+	try:
+		dtree_f = gzip.open(data_dir + "/maximin_tree.gzpckl", "rb")
+		full_maximin_decision_tree = pickle.load(dtree_f)
+		dtree_f.close()
+	except:
+		try:
+			declayouts_f = gzip.open(data_dir + "/raw_dec_layouts.gzpckl", "rb")
+			both_raw_dec_layouts = pickle.load(declayouts_f)
+			declayouts_f.close()
+			
+		except:
+			both_raw_dec_layouts = __build_and_store_dec_layouts(data_dir)
+			
+		
+		# build and store maximin decision tree	
+		full_maximin_decision_tree = { 
+				"cross" : build_maximin_decision_tree(
+									SIDES_NOMINALS["cross"], 
+									both_raw_dec_layouts["cross"]
+				),
+				"nought" : build_maximin_decision_tree(
+									SIDES_NOMINALS["nought"], 
+									both_raw_dec_layouts["nought"]
+				)
+		}
+		
+		dump_file = gzip.open(data_dir + "/maximin_tree.gzpckl", "wb")
+		pickle.dump(full_maximin_decision_tree, dump_file, pickle.HIGHEST_PROTOCOL)
+		dump_file.close()
+		
+		
+def __build_and_store_dec_layouts(data_dir):
+	both_raw_dec_layouts = { 
+				"cross" : __build_field_layouts_dec(SIDES_NOMINALS["cross"]),
+				"nought" : None
+	}
 	
-	if (my_side == SIDES_NOMINALS["nought"]):
-		__field_dec_layouts = field_dec_layouts.copy()
+	both_raw_dec_layouts["nought"] = deepcopy(both_raw_dec_layouts["cross"])
 	
 	# invert payouts for the other side
-	for dec_layout in field_dec_layouts.iterkeys():
-		if (np.abs(field_dec_layouts[dec_layout][0]) == 1.0):
-			field_dec_layouts[dec_layout][0] = -field_dec_layouts[dec_layout][0]
+	for dec_layout in both_raw_dec_layouts["nought"].iterkeys():
+		if ((both_raw_dec_layouts["nought"][dec_layout][0] != None) and
+			(np.abs(both_raw_dec_layouts["nought"][dec_layout][0]) == 1.0)):
+			
+			both_raw_dec_layouts["nought"][dec_layout][0] = \
+				-both_raw_dec_layouts["nought"][dec_layout][0]
 	
-	dump_file = open("dec_layouts_cross.pickle", "wb")
-	pickle.dump(field_dec_layouts, dump_file)
+	# store	
+	dump_file = gzip.open(data_dir + "/raw_dec_layouts.gzpckl", "wb")
+	pickle.dump(both_raw_dec_layouts, dump_file, pickle.HIGHEST_PROTOCOL)
 	dump_file.close()
 	
-	if (my_side == SIDES_NOMINALS["cross"]):
-		__field_dec_layouts = field_dec_layouts.copy()
-	
+	return both_raw_dec_layouts
 	
 	
 def init(side_name):
@@ -239,35 +317,12 @@ def init(side_name):
 	"nought" or "cross"
 	"""
 	
-	global __field_dec_layouts
-	global __maximin_decision_tree
-	
-	global my_side
+	global my_side, my_side_name
 	
 	my_side = SIDES_NOMINALS[side_name]
+	my_side_name = side_name
 	
-	try:
-		dtree_f = open("maximin_tree_" + side_name + ".pickle", "rb")
-		__maximin_decision_tree = pickle.load(dtree_f)
-		dtree_f.close()
-		
-	except:
-		try:
-			declayouts_f = open("dec_layouts_" + side_name + ".pickle", "rb")
-			__field_dec_layouts = pickle.load(declayouts_f)
-			declayouts_f.close()
-			
-		except:
-			build_and_store_dec_layouts()
-			
-		
-		# build and store maximin decision tree	
-		res = __build_maximin_decision_tree()
-		assert(res == True)
-		
-		dump_file = open("maximin_tree_" + side_name + ".pickle", "wb")
-		pickle.dump(__maximin_decision_tree, dump_file)
-		dump_file.close()
+	load_cached_maximin_tree("data")
 	
 	
 	
@@ -276,13 +331,37 @@ def make_move(field, reinf = 0.0):
 	returns altered (my move) field
 	"""
 	
-	assert(__maximin_decision_tree != None)
+	assert(full_maximin_decision_tree != None)
+	assert(my_side_name != "")
 	
-	new_layout_dec = __maximin_decision_tree[__ndarray_to_dec_layout(field * 2)]
+	new_layout_dec = \
+		full_maximin_decision_tree[my_side_name]\
+			[__ndarray_to_dec_layout(field * 2)][3]
 	
 	field[:] = __dec_layout_to_ndarray(new_layout_dec) * 0.5
 	
 
+def rank_move(field_before, field_after, side_name):
+	"""
+	return relative score (worst == 0, best == 1) of move made by
+	'side_name'
+	
+	'field_before' - field layout before move
+	'field_after' - field layout after move
+	"""
+	
+	field_before_dec = __ndarray_to_dec_layout(field_before * 2)
+	
+	### whether proper side is ranked...
+	assert(len(full_maximin_decision_tree[side_name][field_before_dec]) >= 5)
+	###
+	
+	move_id = full_maximin_decision_tree[side_name][field_before_dec][1].index(
+				__ndarray_to_dec_layout(field_after * 2)		
+	)
+	return full_maximin_decision_tree[side_name][field_before_dec][4][move_id]
+	
+	
 
 #================================================================================
 # TEST CODE
@@ -290,5 +369,69 @@ def make_move(field, reinf = 0.0):
 
 if (__name__ == "__main__"):
 	init("nought")
-	#print __dec_layout_to_ndarray(5)
 	
+	"""
+	print my_side_name
+	#for field, decision in full_maximin_decision_tree[my_side_name].iteritems():
+	#	print field
+	#	print decision
+	#	print "\n"
+	
+	declayouts_f = gzip.open("data/raw_dec_layouts.gzpckl", "rb")
+	both_raw_dec_layouts = pickle.load(declayouts_f)
+	declayouts_f.close()
+	
+	#for field, decision in both_raw_dec_layouts[my_side_name].iteritems():
+	#	print field
+	#	print decision
+	#	print "\n"
+	
+	#tt = {
+	#"nought" : build_maximin_decision_tree(SIDES_NOMINALS["nought"], both_raw_dec_layouts["nought"]),
+	#"cross" : build_maximin_decision_tree(SIDES_NOMINALS["cross"], both_raw_dec_layouts["cross"])
+	#}
+	
+	tt = { 
+				
+				
+		
+				"nought" : build_maximin_decision_tree(
+									SIDES_NOMINALS["nought"], 
+									both_raw_dec_layouts["nought"]
+				),
+				"cross" : build_maximin_decision_tree(
+									SIDES_NOMINALS["cross"], 
+									both_raw_dec_layouts["cross"]
+				)
+	}
+	
+	
+	for field, decision in both_raw_dec_layouts["cross"].iteritems():
+		print field
+		print decision
+		print "\n"
+		
+	print "=====================================\n"
+	
+	tt1 = build_maximin_decision_tree(
+									SIDES_NOMINALS["nought"], 
+									both_raw_dec_layouts["nought"]
+				)
+	
+	for field, decision in both_raw_dec_layouts["cross"].iteritems():
+		print field
+		print decision
+		print "\n"
+	
+	tt2 = build_maximin_decision_tree(
+									SIDES_NOMINALS["cross"], 
+									both_raw_dec_layouts["cross"]
+				)
+	#print tt
+	
+	
+	for field, decision in tt2.iteritems():
+		print field
+		print decision
+		print "\n"
+	"""

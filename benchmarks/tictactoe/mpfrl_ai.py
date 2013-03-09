@@ -72,8 +72,8 @@ def init(side_name):
 	mpf_h = MPF_Hierarchy(
 			l0_units = l0_units,
 			levels_num = 3,
-			dump_period = 10,
-			dump_path = "K:/__temp/mpf_rl_dumps/tictactoe_no_rules_no_l0-rsom_3levels_6units_1",
+			dump_period = 0,
+			dump_path = "K:/__temp/mpf_rl_dumps/tictactoe_no_rules_no_l0-rsom_3levels_6units",
 			ts_class = Miller_SOM
 	)
 	
@@ -214,7 +214,7 @@ def make_move(game_field, reinforcement):
 	__adjust_move_layout(mpf_h.output_vec[:])
 	__correct_move_layout(game_field, mpf_h.output_vec[:])
 	
-	game_field[:] = mpf_h.output_vec.reshape((3,3)).copy()	
+	game_field[:] = mpf_h.output_vec.reshape((3,3)).copy()
 	
 	"""
 	# predict next game field

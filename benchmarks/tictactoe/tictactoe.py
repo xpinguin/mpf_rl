@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 from functools import partial
 
@@ -7,6 +5,8 @@ from functools import partial
 import ai as maximin_ai
 import mpfrl_ai as ai
 import montecarlo_ai as mc_ai
+
+MAX_GAMES_NUM = 10000
 
 EMPTY = 0.0
 NOUGHT = 0.5
@@ -90,6 +90,13 @@ def play_game():
 		
 		#show_game_field()
 		
+	def __print_avg_ranks(moves_ranks, moves_num):
+		moves_ranks = moves_ranks / moves_num
+			
+		print "\n" + "="*60 + "\nAvg move RANK: %f vs %f\n" % \
+									(moves_ranks[0], moves_ranks[1])
+		print "="*60 + "\n"
+		
 	
 	stop_game = False
 	
@@ -114,14 +121,17 @@ def play_game():
 	mc_ai.init(ai_side_name)
 	
 	maximin_ai.init(player_side_name)
+	#maximin_ai.init(ai_side_name)
 
 	
 	print "----------------------\n\n"
 	
 	# opponents in sequential order
 	opponents_move_funcs = [None, None]
+	side_names = [None, None]
 	
 	#opponents_move_funcs[int(player_side < ai.my_side)] = __player_move
+	
 	
 	opponents_move_funcs[int(player_side < ai.my_side)] = \
 		partial(maximin_ai.make_move, game_field[:])
@@ -129,11 +139,18 @@ def play_game():
 	opponents_move_funcs[int(player_side > ai.my_side)] = \
 		partial(ai.make_move, game_field[:])
 	
-	game_no = 0
-	reinforcement = 0
-	score = [0, 0]
+	side_names[int(player_side < ai.my_side)] = player_side_name
+	side_names[int(player_side > ai.my_side)] = ai_side_name
 	
-	while (True):
+	game_no = 0
+	reinforcement = 0.0
+	score = np.zeros(2)
+	draws = 0 # counts draws
+	
+	moves_ranks = np.zeros(2)
+	moves_num = np.zeros(2)
+	
+	while (game_no < MAX_GAMES_NUM):
 		print "\n ================= GAME #%d =================\n" % (game_no)
 		
 		game_field[:] = np.zeros((3, 3))
@@ -156,8 +173,9 @@ def play_game():
 					
 				else:
 					reinforcement = 1.0 # 0.5
-					score[0] += 1
-					score[1] += 1
+					#score += 1
+					
+					draws += 1
 				
 				last_winner = None
 				
@@ -166,20 +184,41 @@ def play_game():
 				
 				break
 			
+			prev_game_field = game_field.copy()
+			
 			opponents_move_funcs[turn_iter % 2](reinforcement)
+			
+			move_rank = maximin_ai.rank_move(
+						prev_game_field[:],
+						game_field[:],
+						side_names[turn_iter % 2]
+			)
+			moves_ranks[turn_iter % 2] += move_rank
+			moves_num[turn_iter % 2] += 1
+			
+			#print "\n--\tMOVE RANK: %f\n--" % (move_rank)
 			
 			if (reinforcement != 0.0):
 				reinforcement -= np.sign(reinforcement) * 0.5
+				
+			if ((ai.SIDES_NOMINALS[side_names[turn_iter % 2]] == ai.my_side) and
+				(move_rank > 0)):
+				
+				reinforcement += 1.0
+				
 			
 			turn_iter += 1
 		
 		
 		print "\n ================= END OF GAME =================\n"
-		print "\t\tSCORE: %d VS %d\n" % (score[0], score[1])
+		print "\t\tSCORE: %d VS %d\n\t\tDRAWS: %d\n" % (score[0], score[1], draws)
+		
+		__print_avg_ranks(moves_ranks, moves_num)
 		
 		game_no += 1
 		
 		#time.sleep(2)
-				
+	
+		
 play_game()
 		
